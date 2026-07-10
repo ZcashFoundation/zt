@@ -1,0 +1,358 @@
+#!/usr/bin/env python3
+# zt — run Zebra's CI gate locally.
+#
+# Emulates the checks that ZcashFoundation/zebra's CI runs in
+# `.github/workflows/` (lint.yml, tests-unit.yml, test-crates.yml,
+# docs-check.yml) so you can tell whether a PR will pass CI *before* pushing.
+#
+# It sits next to `ziff`: when you work on a PR you run both — `ziff` diffs the
+# public API and drafts the changelog, `zt` runs the gate (fmt, clippy, docs,
+# feature powerset, unit tests, unused deps, licenses, MSRV).
+#
+# The heavy builds belong on a fast machine; run `zt` there (the same place you
+# run `ziff`). It shells out to `cargo` in the current workspace and reports a
+# pass/fail summary. Checks whose tool or toolchain is missing are skipped with
+# a note rather than failing the run.
+#
+# PREREQUISITES (each check skips itself if its tool is absent)
+#   cargo, rustfmt                 fmt
+#   cargo-nextest                  test
+#   cargo-hack                     feature powerset
+#   cargo-udeps + a nightly rustc  unused deps
+#   cargo-deny                     licenses/advisories/bans
+#   the MSRV toolchain (rustup)    msrv build
+#   codespell                      spellcheck (optional)
+#
+# USAGE
+#   zt [options] [checks...]
+#
+#   zt                 # run the whole gate, stopping at the first failure
+#   zt fmt clippy      # run only these checks
+#   zt --fast          # skip the slow checks (test, hack, udeps, msrv)
+#   zt --keep-going    # run every check even after a failure
+#   zt --list          # list the checks and exit
+#   zt --skip test     # run everything except the named checks
+#
+# OPTIONS
+#   -k, --keep-going   Don't stop at the first failing check.
+#   -f, --fast         Skip the slow checks.
+#   -s, --skip C[,C..] Skip the named checks (comma- or space-separated).
+#       --list         Print the checks (grouped) and exit.
+#       --no-color     Disable ANSI colour.
+#   -V, --version      Print the version and exit.
+#   -h, --help         Print this help and exit.
+#
+# EXIT STATUS
+#   0  every selected check passed (skipped checks don't fail the run)
+#   1  at least one check failed
+#   2  usage error
+
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+import time
+
+VERSION = "0.1.0"
+
+# --- colour ----------------------------------------------------------------
+
+_USE_COLOR = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+
+
+def _c(code, text):
+    if not _USE_COLOR:
+        return text
+    return f"\033[{code}m{text}\033[0m"
+
+
+def bold(t):
+    return _c("1", t)
+
+
+def red(t):
+    return _c("31", t)
+
+
+def green(t):
+    return _c("32", t)
+
+
+def yellow(t):
+    return _c("33", t)
+
+
+def dim(t):
+    return _c("2", t)
+
+
+# --- checks ----------------------------------------------------------------
+#
+# Each check mirrors a CI step; the `src` note points at the workflow it comes
+# from. `argv` is run in the workspace root. `needs` lists executables that must
+# be on PATH (a missing one skips the check). `slow` checks are dropped by
+# --fast. `env` is merged into the environment. `optional` checks never fail the
+# run (used for things CI currently has disabled, e.g. cargo-vet).
+
+# `-D warnings` for rustdoc, minus the private-intra-doc lint (as in lint.yml).
+RUSTDOCFLAGS = "-D warnings -A rustdoc::private_intra_doc_links"
+
+# The feature set CI builds the release binaries and unit tests with.
+RELEASE_FEATURES = "default-release-binaries"
+
+# zebrad's MSRV (libraries are lower, but the binary build is the strict one).
+MSRV = "1.91"
+
+
+class Check:
+    def __init__(self, key, title, argv, group, *, needs=(), slow=False,
+                 env=None, optional=False, src=""):
+        self.key = key
+        self.title = title
+        self.argv = argv
+        self.group = group
+        self.needs = list(needs)
+        self.slow = slow
+        self.env = env or {}
+        self.optional = optional
+        self.src = src
+
+
+def build_checks():
+    return [
+        Check("fmt", "rustfmt --check",
+              ["cargo", "fmt", "--all", "--", "--check"],
+              "format", needs=["cargo", "rustfmt"], src="lint.yml"),
+
+        Check("clippy", "clippy -D warnings (all features)",
+              ["cargo", "clippy", "--workspace", "--all-targets",
+               "--all-features", "--", "-D", "warnings"],
+              "lint", needs=["cargo"], src="lint.yml"),
+
+        Check("clippy-no-default", "clippy -D warnings (no default features)",
+              ["cargo", "clippy", "--workspace", "--all-targets",
+               "--no-default-features", "--", "-D", "warnings"],
+              "lint", needs=["cargo"], src="test-crates.yml"),
+
+        Check("check-locked", "check --locked (lockfile drift)",
+              ["cargo", "check", "--locked", "--all-features", "--all-targets"],
+              "lint", needs=["cargo"], src="CONTRIBUTING gate"),
+
+        Check("doc", "doc -D warnings",
+              ["cargo", "doc", "--no-deps", "--workspace", "--all-features",
+               "--document-private-items"],
+              "docs", needs=["cargo"], env={"RUSTDOCFLAGS": RUSTDOCFLAGS},
+              src="lint.yml"),
+
+        Check("hack", "hack check (feature powerset)",
+              ["cargo", "hack", "check", "--workspace"],
+              "lint", needs=["cargo", "cargo-hack"], slow=True, src="lint.yml"),
+
+        Check("test", "nextest run (ci profile)",
+              ["cargo", "nextest", "run", "--profile", "ci", "--locked",
+               "--release", "--features", RELEASE_FEATURES,
+               "--run-ignored=all"],
+              "test", needs=["cargo", "cargo-nextest"], slow=True,
+              src="tests-unit.yml"),
+
+        Check("udeps", "udeps (unused dependencies)",
+              ["cargo", "udeps", "--workspace", "--all-targets",
+               "--all-features", "--locked"],
+              "supply-chain", needs=["cargo", "cargo-udeps"], slow=True,
+              src="lint.yml"),
+
+        Check("deny", "deny check (licenses/advisories/bans)",
+              ["cargo", "deny", "check"],
+              "supply-chain", needs=["cargo", "cargo-deny"], src="lint.yml"),
+
+        Check("msrv", f"build on MSRV {MSRV}",
+              ["cargo", f"+{MSRV}", "check", "--workspace"],
+              "msrv", needs=["cargo", "rustup"], slow=True, src="lint.yml"),
+
+        Check("codespell", "codespell",
+              ["codespell", "--config", ".codespellrc"],
+              "docs", needs=["codespell"], optional=True, src="docs-check.yml"),
+
+        # CI disabled cargo-vet in #10930; kept here, optional, for parity.
+        Check("vet", "vet check (supply-chain audit)",
+              ["cargo", "vet", "check"],
+              "supply-chain", needs=["cargo", "cargo-vet"], optional=True,
+              src="disabled in CI (#10930)"),
+    ]
+
+
+# --- prerequisite probing --------------------------------------------------
+
+def missing_tools(check):
+    missing = [t for t in check.needs if shutil.which(t) is None]
+    # The MSRV check also needs that specific toolchain installed via rustup.
+    if check.key == "msrv" and not missing:
+        try:
+            out = subprocess.run(["rustup", "toolchain", "list"],
+                                 capture_output=True, text=True, check=False)
+            if not any(line.startswith(MSRV) for line in out.stdout.splitlines()):
+                missing.append(f"rustup toolchain {MSRV}")
+        except OSError:
+            missing.append("rustup")
+    return missing
+
+
+# --- running ---------------------------------------------------------------
+
+def fmt_duration(seconds):
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    m, s = divmod(int(seconds), 60)
+    return f"{m}m{s:02d}s"
+
+
+def run_check(check):
+    """Run one check. Returns (status, seconds) where status is
+    'pass' | 'fail' | 'skip'."""
+    missing = missing_tools(check)
+    if missing:
+        print(f"{yellow('○ skip')} {check.title} "
+              f"{dim('— missing ' + ', '.join(missing))}")
+        return "skip", 0.0
+
+    print(f"{bold('▶')} {check.title}  {dim('$ ' + ' '.join(check.argv))}")
+    env = {**os.environ, **check.env}
+    start = time.monotonic()
+    result = subprocess.run(check.argv, env=env, check=False)
+    elapsed = time.monotonic() - start
+
+    if result.returncode == 0:
+        print(f"{green('✓ pass')} {check.title} {dim('(' + fmt_duration(elapsed) + ')')}\n")
+        return "pass", elapsed
+    tag = yellow("✗ fail (optional)") if check.optional else red("✗ fail")
+    print(f"{tag} {check.title} "
+          f"{dim('(' + fmt_duration(elapsed) + f', exit {result.returncode})')}\n")
+    return ("skip" if check.optional else "fail"), elapsed
+
+
+def select(checks, names, skip, fast):
+    if names:
+        by_key = {c.key: c for c in checks}
+        unknown = [n for n in names if n not in by_key]
+        if unknown:
+            die(f"unknown check(s): {', '.join(unknown)} "
+                f"(run with --list to see them)")
+        chosen = [by_key[n] for n in names]
+    else:
+        chosen = [c for c in checks if not c.optional]
+    if skip:
+        chosen = [c for c in chosen if c.key not in skip]
+    if fast:
+        chosen = [c for c in chosen if not c.slow]
+    return chosen
+
+
+def print_list(checks):
+    group_order = ["format", "lint", "docs", "test", "supply-chain", "msrv"]
+    groups = {}
+    for c in checks:
+        groups.setdefault(c.group, []).append(c)
+    for g in group_order + [g for g in groups if g not in group_order]:
+        if g not in groups:
+            continue
+        print(bold(g))
+        for c in groups[g]:
+            flags = []
+            if c.slow:
+                flags.append("slow")
+            if c.optional:
+                flags.append("optional")
+            suffix = dim(f"  [{', '.join(flags)}]") if flags else ""
+            print(f"  {c.key:<16} {c.title}{suffix}  {dim('(' + c.src + ')')}")
+
+
+def die(msg):
+    print(f"{red('error:')} {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def main(argv):
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument("checks", nargs="*")
+    p.add_argument("-k", "--keep-going", action="store_true")
+    p.add_argument("-f", "--fast", action="store_true")
+    p.add_argument("-s", "--skip", action="append", default=[])
+    p.add_argument("--list", action="store_true")
+    p.add_argument("--no-color", action="store_true")
+    p.add_argument("-V", "--version", action="store_true")
+    p.add_argument("-h", "--help", action="store_true")
+    args = p.parse_args(argv)
+
+    global _USE_COLOR
+    if args.no_color:
+        _USE_COLOR = False
+
+    if args.help:
+        # The usage lives in the comment header at the top of this file.
+        with open(__file__) as f:
+            for line in f:
+                if line.startswith("#!"):
+                    continue
+                if line.startswith("#"):
+                    print(line[1:].rstrip() if len(line) > 1 else "")
+                else:
+                    break
+        return 0
+    if args.version:
+        print(f"zt {VERSION}")
+        return 0
+
+    checks = build_checks()
+    if args.list:
+        print_list(checks)
+        return 0
+
+    if not shutil.which("cargo"):
+        die("cargo not found on PATH")
+    if not os.path.exists("Cargo.toml"):
+        die("no Cargo.toml in the current directory (run zt from a workspace root)")
+
+    skip = {s for item in args.skip for s in item.replace(",", " ").split()}
+    selected = select(checks, args.checks, skip, args.fast)
+    if not selected:
+        die("no checks selected")
+
+    print(bold(f"zt {VERSION}") + dim(f" — {len(selected)} checks in "
+          f"{os.path.basename(os.getcwd())}\n"))
+
+    results = []
+    failed = False
+    for check in selected:
+        status, elapsed = run_check(check)
+        results.append((check, status, elapsed))
+        if status == "fail":
+            failed = True
+            if not args.keep_going:
+                print(dim("stopping at first failure (use --keep-going to run the rest)\n"))
+                break
+
+    # summary
+    n_pass = sum(1 for _, s, _ in results if s == "pass")
+    n_fail = sum(1 for _, s, _ in results if s == "fail")
+    n_skip = sum(1 for _, s, _ in results if s == "skip")
+    total = sum(e for _, _, e in results)
+    print(bold("summary") + dim(f"  ({fmt_duration(total)} total)"))
+    for check, status, elapsed in results:
+        mark = {"pass": green("✓"), "fail": red("✗"), "skip": yellow("○")}[status]
+        print(f"  {mark} {check.key:<16} {dim(fmt_duration(elapsed))}")
+    line = f"{n_pass} passed"
+    if n_fail:
+        line += f", {red(str(n_fail) + ' failed')}"
+    if n_skip:
+        line += f", {yellow(str(n_skip) + ' skipped')}"
+    print("\n" + bold(line))
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        print("\ninterrupted", file=sys.stderr)
+        sys.exit(130)
