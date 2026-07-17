@@ -156,11 +156,14 @@ def build_checks():
               "test", needs=["cargo", "cargo-nextest"], slow=True,
               src="tests-unit.yml"),
 
+        # cargo-udeps needs nightly (it passes `-Z` flags). CI runs it under a
+        # nightly toolchain (advisory.yml), so pin `+nightly` here — the default
+        # toolchain is usually stable, which rejects the `-Z` flags.
         Check("udeps", "udeps (unused dependencies)",
-              ["cargo", "udeps", "--workspace", "--all-targets",
+              ["cargo", "+nightly", "udeps", "--workspace", "--all-targets",
                "--all-features", "--locked"],
-              "supply-chain", needs=["cargo", "cargo-udeps"], slow=True,
-              src="lint.yml"),
+              "supply-chain", needs=["cargo", "cargo-udeps", "rustup"], slow=True,
+              src="advisory.yml"),
 
         Check("deny", "deny check (licenses/advisories/bans)",
               ["cargo", "deny", "check"],
@@ -186,13 +189,16 @@ def build_checks():
 
 def missing_tools(check):
     missing = [t for t in check.needs if shutil.which(t) is None]
-    # The MSRV check also needs that specific toolchain installed via rustup.
-    if check.key == "msrv" and not missing:
+    # Some checks need a specific toolchain installed via rustup: the MSRV build
+    # needs the MSRV toolchain, and udeps needs nightly.
+    required_toolchain = {"msrv": MSRV, "udeps": "nightly"}.get(check.key)
+    if required_toolchain and not missing:
         try:
             out = subprocess.run(["rustup", "toolchain", "list"],
                                  capture_output=True, text=True, check=False)
-            if not any(line.startswith(MSRV) for line in out.stdout.splitlines()):
-                missing.append(f"rustup toolchain {MSRV}")
+            if not any(line.startswith(required_toolchain)
+                       for line in out.stdout.splitlines()):
+                missing.append(f"rustup toolchain {required_toolchain}")
         except OSError:
             missing.append("rustup")
     return missing
