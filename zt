@@ -5,12 +5,12 @@
 # `.github/workflows/` (lint.yml, tests-unit.yml, test-crates.yml,
 # docs-check.yml) so you can tell whether a PR will pass CI *before* pushing.
 #
-# It sits next to `ziff`: when you work on a PR you run both — `ziff` diffs the
+# It sits next to `zc`: when you work on a PR you run both — `zc` diffs the
 # public API and drafts the changelog, `zt` runs the gate (fmt, clippy, docs,
 # feature powerset, unit tests, unused deps, licenses, MSRV).
 #
 # The heavy builds belong on a fast machine; run `zt` there (the same place you
-# run `ziff`). It shells out to `cargo` in the current workspace and reports a
+# run `zc`). It shells out to `cargo` in the current workspace and reports a
 # pass/fail summary. Checks whose tool or toolchain is missing are skipped with
 # a note rather than failing the run.
 #
@@ -106,8 +106,19 @@ MSRV = "1.91"
 
 
 class Check:
-    def __init__(self, key, title, argv, group, *, needs=(), slow=False,
-                 env=None, optional=False, src=""):
+    def __init__(
+        self,
+        key,
+        title,
+        argv,
+        group,
+        *,
+        needs=(),
+        slow=False,
+        env=None,
+        optional=False,
+        src="",
+    ):
         self.key = key
         self.title = title
         self.argv = argv
@@ -121,71 +132,162 @@ class Check:
 
 def build_checks():
     return [
-        Check("fmt", "rustfmt --check",
-              ["cargo", "fmt", "--all", "--", "--check"],
-              "format", needs=["cargo", "rustfmt"], src="lint.yml"),
-
-        Check("clippy", "clippy -D warnings (all features)",
-              ["cargo", "clippy", "--workspace", "--all-targets",
-               "--all-features", "--", "-D", "warnings"],
-              "lint", needs=["cargo"], src="lint.yml"),
-
-        Check("clippy-no-default", "clippy -D warnings (no default features)",
-              ["cargo", "clippy", "--workspace", "--all-targets",
-               "--no-default-features", "--", "-D", "warnings"],
-              "lint", needs=["cargo"], src="test-crates.yml"),
-
-        Check("check-locked", "check --locked (lockfile drift)",
-              ["cargo", "check", "--locked", "--all-features", "--all-targets"],
-              "lint", needs=["cargo"], src="CONTRIBUTING gate"),
-
-        Check("doc", "doc -D warnings",
-              ["cargo", "doc", "--no-deps", "--workspace", "--all-features",
-               "--document-private-items"],
-              "docs", needs=["cargo"], env={"RUSTDOCFLAGS": RUSTDOCFLAGS},
-              src="lint.yml"),
-
-        Check("hack", "hack check (feature powerset)",
-              ["cargo", "hack", "check", "--workspace"],
-              "lint", needs=["cargo", "cargo-hack"], slow=True, src="lint.yml"),
-
-        Check("test", "nextest run (ci profile)",
-              ["cargo", "nextest", "run", "--profile", "ci", "--locked",
-               "--release", "--features", RELEASE_FEATURES,
-               "--run-ignored=all"],
-              "test", needs=["cargo", "cargo-nextest"], slow=True,
-              src="tests-unit.yml"),
-
+        Check(
+            "fmt",
+            "rustfmt --check",
+            ["cargo", "fmt", "--all", "--", "--check"],
+            "format",
+            needs=["cargo", "rustfmt"],
+            src="lint.yml",
+        ),
+        Check(
+            "clippy",
+            "clippy -D warnings (all features)",
+            [
+                "cargo",
+                "clippy",
+                "--workspace",
+                "--all-targets",
+                "--all-features",
+                "--",
+                "-D",
+                "warnings",
+            ],
+            "lint",
+            needs=["cargo"],
+            src="lint.yml",
+        ),
+        Check(
+            "clippy-no-default",
+            "clippy -D warnings (no default features)",
+            [
+                "cargo",
+                "clippy",
+                "--workspace",
+                "--all-targets",
+                "--no-default-features",
+                "--",
+                "-D",
+                "warnings",
+            ],
+            "lint",
+            needs=["cargo"],
+            src="test-crates.yml",
+        ),
+        Check(
+            "check-locked",
+            "check --locked (lockfile drift)",
+            ["cargo", "check", "--locked", "--all-features", "--all-targets"],
+            "lint",
+            needs=["cargo"],
+            src="CONTRIBUTING gate",
+        ),
+        Check(
+            "doc",
+            "doc -D warnings",
+            [
+                "cargo",
+                "doc",
+                "--no-deps",
+                "--workspace",
+                "--all-features",
+                "--document-private-items",
+            ],
+            "docs",
+            needs=["cargo"],
+            env={"RUSTDOCFLAGS": RUSTDOCFLAGS},
+            src="lint.yml",
+        ),
+        Check(
+            "hack",
+            "hack check (feature powerset)",
+            ["cargo", "hack", "check", "--workspace"],
+            "lint",
+            needs=["cargo", "cargo-hack"],
+            slow=True,
+            src="lint.yml",
+        ),
+        Check(
+            "test",
+            "nextest run (ci profile)",
+            [
+                "cargo",
+                "nextest",
+                "run",
+                "--profile",
+                "ci",
+                "--locked",
+                "--release",
+                "--features",
+                RELEASE_FEATURES,
+                "--run-ignored=all",
+            ],
+            "test",
+            needs=["cargo", "cargo-nextest"],
+            slow=True,
+            src="tests-unit.yml",
+        ),
         # cargo-udeps needs nightly (it passes `-Z` flags). CI runs it under a
         # nightly toolchain (advisory.yml), so pin `+nightly` here — the default
         # toolchain is usually stable, which rejects the `-Z` flags.
-        Check("udeps", "udeps (unused dependencies)",
-              ["cargo", "+nightly", "udeps", "--workspace", "--all-targets",
-               "--all-features", "--locked"],
-              "supply-chain", needs=["cargo", "cargo-udeps", "rustup"], slow=True,
-              src="advisory.yml"),
-
-        Check("deny", "deny check (licenses/advisories/bans)",
-              ["cargo", "deny", "check"],
-              "supply-chain", needs=["cargo", "cargo-deny"], src="lint.yml"),
-
-        Check("msrv", f"build on MSRV {MSRV}",
-              ["cargo", f"+{MSRV}", "check", "--workspace"],
-              "msrv", needs=["cargo", "rustup"], slow=True, src="lint.yml"),
-
-        Check("codespell", "codespell",
-              ["codespell", "--config", ".codespellrc"],
-              "docs", needs=["codespell"], optional=True, src="docs-check.yml"),
-
+        Check(
+            "udeps",
+            "udeps (unused dependencies)",
+            [
+                "cargo",
+                "+nightly",
+                "udeps",
+                "--workspace",
+                "--all-targets",
+                "--all-features",
+                "--locked",
+            ],
+            "supply-chain",
+            needs=["cargo", "cargo-udeps", "rustup"],
+            slow=True,
+            src="advisory.yml",
+        ),
+        Check(
+            "deny",
+            "deny check (licenses/advisories/bans)",
+            ["cargo", "deny", "check"],
+            "supply-chain",
+            needs=["cargo", "cargo-deny"],
+            src="lint.yml",
+        ),
+        Check(
+            "msrv",
+            f"build on MSRV {MSRV}",
+            ["cargo", f"+{MSRV}", "check", "--workspace"],
+            "msrv",
+            needs=["cargo", "rustup"],
+            slow=True,
+            src="lint.yml",
+        ),
+        Check(
+            "codespell",
+            "codespell",
+            ["codespell", "--config", ".codespellrc"],
+            "docs",
+            needs=["codespell"],
+            optional=True,
+            src="docs-check.yml",
+        ),
         # CI disabled cargo-vet in #10930; kept here, optional, for parity.
-        Check("vet", "vet check (supply-chain audit)",
-              ["cargo", "vet", "check"],
-              "supply-chain", needs=["cargo", "cargo-vet"], optional=True,
-              src="disabled in CI (#10930)"),
+        Check(
+            "vet",
+            "vet check (supply-chain audit)",
+            ["cargo", "vet", "check"],
+            "supply-chain",
+            needs=["cargo", "cargo-vet"],
+            optional=True,
+            src="disabled in CI (#10930)",
+        ),
     ]
 
 
 # --- prerequisite probing --------------------------------------------------
+
 
 def missing_tools(check):
     missing = [t for t in check.needs if shutil.which(t) is None]
@@ -194,10 +296,15 @@ def missing_tools(check):
     required_toolchain = {"msrv": MSRV, "udeps": "nightly"}.get(check.key)
     if required_toolchain and not missing:
         try:
-            out = subprocess.run(["rustup", "toolchain", "list"],
-                                 capture_output=True, text=True, check=False)
-            if not any(line.startswith(required_toolchain)
-                       for line in out.stdout.splitlines()):
+            out = subprocess.run(
+                ["rustup", "toolchain", "list"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if not any(
+                line.startswith(required_toolchain) for line in out.stdout.splitlines()
+            ):
                 missing.append(f"rustup toolchain {required_toolchain}")
         except OSError:
             missing.append("rustup")
@@ -205,6 +312,7 @@ def missing_tools(check):
 
 
 # --- running ---------------------------------------------------------------
+
 
 def fmt_duration(seconds):
     if seconds < 60:
@@ -218,8 +326,10 @@ def run_check(check):
     'pass' | 'fail' | 'skip'."""
     missing = missing_tools(check)
     if missing:
-        print(f"{yellow('○ skip')} {check.title} "
-              f"{dim('— missing ' + ', '.join(missing))}")
+        print(
+            f"{yellow('○ skip')} {check.title} "
+            f"{dim('— missing ' + ', '.join(missing))}"
+        )
         return "skip", 0.0
 
     print(f"{bold('▶')} {check.title}  {dim('$ ' + ' '.join(check.argv))}")
@@ -229,11 +339,15 @@ def run_check(check):
     elapsed = time.monotonic() - start
 
     if result.returncode == 0:
-        print(f"{green('✓ pass')} {check.title} {dim('(' + fmt_duration(elapsed) + ')')}\n")
+        print(
+            f"{green('✓ pass')} {check.title} {dim('(' + fmt_duration(elapsed) + ')')}\n"
+        )
         return "pass", elapsed
     tag = yellow("✗ fail (optional)") if check.optional else red("✗ fail")
-    print(f"{tag} {check.title} "
-          f"{dim('(' + fmt_duration(elapsed) + f', exit {result.returncode})')}\n")
+    print(
+        f"{tag} {check.title} "
+        f"{dim('(' + fmt_duration(elapsed) + f', exit {result.returncode})')}\n"
+    )
     return ("skip" if check.optional else "fail"), elapsed
 
 
@@ -242,8 +356,10 @@ def select(checks, names, skip, fast):
         by_key = {c.key: c for c in checks}
         unknown = [n for n in names if n not in by_key]
         if unknown:
-            die(f"unknown check(s): {', '.join(unknown)} "
-                f"(run with --list to see them)")
+            die(
+                f"unknown check(s): {', '.join(unknown)} "
+                f"(run with --list to see them)"
+            )
         chosen = [by_key[n] for n in names]
     else:
         chosen = [c for c in checks if not c.optional]
@@ -324,8 +440,10 @@ def main(argv):
     if not selected:
         die("no checks selected")
 
-    print(bold(f"zt {VERSION}") + dim(f" — {len(selected)} checks in "
-          f"{os.path.basename(os.getcwd())}\n"))
+    print(
+        bold(f"zt {VERSION}")
+        + dim(f" — {len(selected)} checks in " f"{os.path.basename(os.getcwd())}\n")
+    )
 
     results = []
     failed = False
@@ -335,7 +453,11 @@ def main(argv):
         if status == "fail":
             failed = True
             if not args.keep_going:
-                print(dim("stopping at first failure (use --keep-going to run the rest)\n"))
+                print(
+                    dim(
+                        "stopping at first failure (use --keep-going to run the rest)\n"
+                    )
+                )
                 break
 
     # summary

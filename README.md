@@ -9,8 +9,8 @@ you push.
 docs, the feature powerset, unit tests, unused-dependency and license audits, and
 an MSRV build — then prints a per-check pass/fail summary.
 
-It's the companion to [`ziff`](https://github.com/ZcashFoundation/ziff): on a PR
-you run **`ziff`** (public-API + dependency diff, changelog draft) and **`zt`**
+It's the companion to [`zc`](https://github.com/ZcashFoundation/zc): on a PR
+you run **`zc`** (public-API + dependency diff, changelog draft) and **`zt`**
 (the CI gate) side by side.
 
 ## Install
@@ -35,7 +35,7 @@ zt --skip test     # run everything except the named checks
 zt --list          # list the checks (grouped, with their source workflow)
 ```
 
-Run the heavy builds where they're fast — the same host you run `ziff` on:
+Run the heavy builds where they're fast — the same host you run `zc` on:
 
 ```sh
 ssh build-host 'cd path/to/zebra && ROCKSDB_LIB_DIR=/usr/lib/ zt'

@@ -7,7 +7,7 @@ description: >-
   (cargo-udeps), licenses/advisories (cargo-deny), and an MSRV build — each
   mirrored from `.github/workflows/`. Run the heavy builds on the fast remote
   host. Use when the user asks to run the gate, emulate CI, or verify a branch/PR
-  before pushing. Pairs with the `changelog`/ziff skill on a PR.
+  before pushing. Pairs with the `zc` skill on a PR.
 ---
 
 # Run Zebra's CI gate with `zt`
@@ -15,7 +15,7 @@ description: >-
 `zt` shells out to `cargo` in the current workspace and runs the same checks
 Zebra's CI runs (`.github/workflows/lint.yml`, `tests-unit.yml`,
 `test-crates.yml`, `docs-check.yml`), reporting a per-check pass/fail summary.
-It sits next to `ziff`: on a PR you run **`ziff`** (public-API + dependency diff,
+It sits next to `zc`: on a PR you run **`zc`** (public-API + dependency diff,
 changelog draft) and **`zt`** (the CI gate) side by side.
 
 Needs `zt` on `PATH`. Each check skips itself if its tool or toolchain is
@@ -23,7 +23,7 @@ missing, so a partial toolset still gives useful output.
 
 ## Where it runs
 
-The heavy builds belong on the fast remote host (the same place you run `ziff`):
+The heavy builds belong on the fast remote host (the same place you run `zc`):
 
 ```
 ssh d.lan 'fish -c "cd /home/m/zcash/<repo>; and set -x ROCKSDB_LIB_DIR /usr/lib/; and zt"'
