@@ -46,12 +46,28 @@ out=$(cd "$work" && PATH="$bin:$PATH" FAKE_RC=1 "$ZT" fmt --no-color); rc=$?
 assert_eq "$rc" "1" "check fails -> exit 1"
 assert_contains "$out" "fail" "failing check reports fail"
 
-# A missing tool skips the check (does not fail the run). Use a PATH with just
-# python + the fake cargo, so cargo-hack is absent no matter the host.
+# A missing tool skips the check, but a *required* check that never ran leaves
+# "will CI pass?" unanswered, so the run must not report success. Use a PATH with
+# just python + the fake cargo, so cargo-hack is absent no matter the host.
 pydir=$(dirname "$(command -v python3)")
 out=$(cd "$work" && PATH="$bin:$pydir" "$ZT" hack --no-color); rc=$?
-assert_eq "$rc" "0" "missing tool -> exit 0"
+assert_eq "$rc" "3" "missing required tool -> exit 3 (incomplete)"
 assert_contains "$out" "skip" "missing tool reports skip"
+assert_contains "$out" "incomplete" "missing required tool is called out"
+assert_contains "$out" "cargo-hack not found" "startup lists unresolved tools"
+
+# --allow-missing restores the old behaviour for a deliberately partial toolset.
+out=$(cd "$work" && PATH="$bin:$pydir" "$ZT" hack --allow-missing --no-color); rc=$?
+assert_eq "$rc" "0" "missing required tool + --allow-missing -> exit 0"
+
+# An optional check (codespell, vet) is allowed to be absent: it skips quietly.
+out=$(cd "$work" && PATH="$bin:$pydir" "$ZT" codespell --no-color); rc=$?
+assert_eq "$rc" "0" "missing optional tool -> exit 0"
+assert_contains "$out" "skip" "missing optional tool reports skip"
+
+# A real failure still outranks incompleteness.
+out=$(cd "$work" && PATH="$bin:$pydir" FAKE_RC=1 "$ZT" fmt hack --keep-going --no-color); rc=$?
+assert_eq "$rc" "1" "failure outranks incomplete -> exit 1"
 
 # --fast drops the slow checks.
 assert_contains "$(cd "$work" && "$ZT" --list --no-color)" "test" "test check exists"
