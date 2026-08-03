@@ -37,15 +37,20 @@
 #   -k, --keep-going   Don't stop at the first failing check.
 #   -f, --fast         Skip the slow checks.
 #   -s, --skip C[,C..] Skip the named checks (comma- or space-separated).
+#   -a, --allow-missing  Treat a missing required tool as a pass, not exit 3.
 #       --list         Print the checks (grouped) and exit.
 #       --no-color     Disable ANSI colour.
 #   -V, --version      Print the version and exit.
 #   -h, --help         Print this help and exit.
 #
 # EXIT STATUS
-#   0  every selected check passed (skipped checks don't fail the run)
+#   0  every selected check ran and passed
 #   1  at least one check failed
 #   2  usage error
+#   3  incomplete: a required check could not run because its tool is missing.
+#      The gate cannot answer "will CI pass", so it does not report success.
+#      Optional checks (vet, codespell) still skip quietly. --allow-missing
+#      restores the old behaviour of treating those skips as success.
 
 import argparse
 import os
@@ -400,6 +405,7 @@ def main(argv):
     p.add_argument("-k", "--keep-going", action="store_true")
     p.add_argument("-f", "--fast", action="store_true")
     p.add_argument("-s", "--skip", action="append", default=[])
+    p.add_argument("-a", "--allow-missing", action="store_true")
     p.add_argument("--list", action="store_true")
     p.add_argument("--no-color", action="store_true")
     p.add_argument("-V", "--version", action="store_true")
@@ -445,6 +451,16 @@ def main(argv):
         + dim(f" — {len(selected)} checks in " f"{os.path.basename(os.getcwd())}\n")
     )
 
+    # Which binaries actually resolved. A PATH problem is otherwise invisible:
+    # the checks simply self-skip and the run looks fast and clean.
+    tools = sorted({t for c in selected for t in c.needs})
+    if tools:
+        resolved = []
+        for t in tools:
+            where = shutil.which(t)
+            resolved.append(f"{t} {dim(where) if where else red('not found')}")
+        print(dim("tools: ") + dim(" · ").join(resolved) + "\n")
+
     results = []
     failed = False
     for check in selected:
@@ -469,12 +485,24 @@ def main(argv):
     for check, status, elapsed in results:
         mark = {"pass": green("✓"), "fail": red("✗"), "skip": yellow("○")}[status]
         print(f"  {mark} {check.key:<16} {dim(fmt_duration(elapsed))}")
+    # A required check that never ran leaves the question unanswered, so it must
+    # not read as success: that is how a missing cargo-hack once produced a green
+    # run over six of ten checks.
+    incomplete = [c for c, st, _ in results if st == "skip" and not c.optional]
     line = f"{n_pass} passed"
     if n_fail:
         line += f", {red(str(n_fail) + ' failed')}"
     if n_skip:
         line += f", {yellow(str(n_skip) + ' skipped')}"
     print("\n" + bold(line))
+    if incomplete and not args.allow_missing:
+        names = ", ".join(c.key for c in incomplete)
+        print(
+            red("incomplete")
+            + f": {names} could not run (missing tools). "
+            + dim("Install them, or pass --allow-missing.")
+        )
+        return 1 if failed else 3
     return 1 if failed else 0
 
 
