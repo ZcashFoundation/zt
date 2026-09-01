@@ -23,16 +23,21 @@ missing, so a partial toolset still gives useful output.
 
 ## Where it runs
 
-The heavy builds belong on the fast remote host (the same place you run `zc`):
+Run the heavy builds where they're fast — the same host you run `zc` on:
 
+```sh
+ssh build-host 'cd path/to/zebra && ROCKSDB_LIB_DIR=/usr/lib/ zt'
 ```
-ssh d.lan 'fish -c "cd /home/m/zcash/<repo>; and set -x ROCKSDB_LIB_DIR /usr/lib/; and zt"'
-```
+
+Whatever gets the code there must carry the working tree, not just the last
+commit. A gate run against a stale checkout reports on code you are not about to
+push, and reports it green. Prefer a wrapper that syncs and verifies before
+running over a bare `ssh`, if your setup has one.
 
 `ROCKSDB_LIB_DIR=/usr/lib/` links the system RocksDB instead of recompiling the
-bundled one (as CI does). `fmt` is the only check that must also be correct on
-localhost (the source of truth that syncs to the remote) — run `zt fmt` locally
-too, or `cargo fmt --all` before committing.
+bundled one, exactly as CI does. Keep `fmt` correct on the host you commit from:
+a one-way sync discards a formatting fix made on the far side, so run `zt fmt`
+there too, or `cargo fmt --all` before committing.
 
 ## Usage
 
